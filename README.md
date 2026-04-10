@@ -110,23 +110,25 @@ It can:
 ---
 
 ## 📁 Project Structure
-  ai-analyst-agent/
-  ├── agent.py
-  ├── rag_engine.py
-  ├── embedding_engine.py
-  ├── dataset_agent.py
-  ├── ocr_engine.py
-  ├── ingestion.py
-  ├── analytics_engine.py
-  ├── query_engine.py
-  ├── main.py
-  │
-  ├── data/
-  ├── processed/
-  ├── metadata/
-  │
-  ├── requirements.txt
-  ├── README.md
+
+```bash
+ai-analyst-agent/
+├── agent.py
+├── rag_engine.py
+├── embedding_engine.py
+├── dataset_agent.py
+├── ocr_engine.py
+├── ingestion.py
+├── analytics_engine.py
+├── query_engine.py
+├── main.py
+│
+├── data/
+├── processed/
+├── metadata/
+│
+├── requirements.txt
+├── README.md
 ---
 
 🚧 Roadmap
