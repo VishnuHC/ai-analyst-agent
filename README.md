@@ -1,4 +1,4 @@
-#🧠 AI Analyst Agent
+# 🧠 AI Analyst Agent
 
 An intelligent, autonomous AI system that performs business data analysis using **RAG (Retrieval-Augmented Generation)**, **multi-agent reasoning**, and **execution pipelines**.
 
@@ -162,7 +162,7 @@ It can:
 
 ---
 
-👤 Author - Vishnu Chevvakula
+# 👤 Author - Vishnu Chevvakula
 
-⭐ If you like this project
+## ⭐ If you like this project
 Give it a star ⭐ and feel free to contribute!
