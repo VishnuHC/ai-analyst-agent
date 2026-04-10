@@ -16,6 +16,8 @@ It can:
 - Learn from past mistakes  
 - Run autonomously  
 
+---
+
 🔥 Key Features
 
   🧠 Intelligent Reasoning
@@ -54,6 +56,8 @@ It can:
     - Generates insights continuously
     - Simulates real analyst behavior
 
+---
+
 🏗️ Architecture
   User Query
     → Intent Detection
@@ -80,6 +84,7 @@ It can:
   sales trend over time
   generate business insights
 
+---
 
 🛠️ Installation
 
@@ -101,6 +106,8 @@ It can:
 
       /auto
   Runs continuous analysis on available datasets.
+
+---
 
 📁 Project Structure
   ai-analyst-agent/
