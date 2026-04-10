@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.env
+
+data/
+processed/
+metadata/
+
+llm_cache.json
+agent_memory.json
+data_catalog.json
+
+.DS_Store
