@@ -109,10 +109,9 @@ It can:
 
 ---
 
-📁 Project Structure
+## 📁 Project Structure
   ai-analyst-agent/
-  │
-  |── agent.py
+  ├── agent.py
   ├── rag_engine.py
   ├── embedding_engine.py
   ├── dataset_agent.py
@@ -128,7 +127,6 @@ It can:
   │
   ├── requirements.txt
   ├── README.md
-
 ---
 
 🚧 Roadmap
