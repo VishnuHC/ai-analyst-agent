@@ -1,10 +1,10 @@
-🧠 AI Analyst Agent
+#🧠 AI Analyst Agent
 
 An intelligent, autonomous AI system that performs business data analysis using **RAG (Retrieval-Augmented Generation)**, **multi-agent reasoning**, and **execution pipelines**.
 
 ---
 
-🚀 Overview
+## 🚀 Overview
 
   AI Analyst Agent is designed to act like a **data analyst**, not just a tool.
 
@@ -18,7 +18,7 @@ It can:
 
 ---
 
-🔥 Key Features
+## 🔥 Key Features
 
   🧠 Intelligent Reasoning
     - Intent detection (analysis, comparison, trend, diagnostic)
@@ -58,7 +58,7 @@ It can:
 
 ---
 
-🏗️ Architecture
+## 🏗️ Architecture
   User Query
     → Intent Detection
     → Strategy Selection
@@ -86,7 +86,7 @@ It can:
 
 ---
 
-🛠️ Installation
+## 🛠️ Installation
 
         git clone https://github.com/VishnnHC/ai-analyst-agent.git
         cd ai-analyst-agent
@@ -111,27 +111,26 @@ It can:
 
 ## 📁 Project Structure
 
-```bash
-ai-analyst-agent/
-├── agent.py
-├── rag_engine.py
-├── embedding_engine.py
-├── dataset_agent.py
-├── ocr_engine.py
-├── ingestion.py
-├── analytics_engine.py
-├── query_engine.py
-├── main.py
-│
-├── data/
-├── processed/
-├── metadata/
-│
-├── requirements.txt
-├── README.md
+    ai-analyst-agent/
+    ├── agent.py
+    ├── rag_engine.py
+    ├── embedding_engine.py
+    ├── dataset_agent.py
+    ├── ocr_engine.py
+    ├── ingestion.py
+    ├── analytics_engine.py
+    ├── query_engine.py
+    ├── main.py
+    │
+    ├── data/
+    ├── processed/
+    ├── metadata/
+    │
+    ├── requirements.txt
+    ├── README.md
 ---
 
-🚧 Roadmap
+## 🚧 Roadmap
 
   ✅ Phase 1
   	•	Core pipeline
