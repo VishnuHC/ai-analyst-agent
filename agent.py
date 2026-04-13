@@ -35,8 +35,8 @@ def detect_query_intent(query: str) -> str:
         return "anomaly"
 
     return "analysis"
-# TODO: Replace ask_llm with pluggable LLM interface (OpenAI / Ollama / local models)
-from llm_engine import ask_llm
+from llm_engine import ask_llm, interpret_query, rewrite_query_from_intent, debug_intent
+from nlp_engine import QueryContext
 llm_cache = {}
 
 # --- Persistent LLM cache ---
@@ -46,6 +46,33 @@ CACHE_FILE = "llm_cache.json"
 # --- SELF-LEARNING MEMORY SYSTEM ---
 MEMORY_FILE = "agent_memory.json"
 agent_memory = {}
+
+# --- Conversational Context Memory ---
+query_context = QueryContext()
+conversation_summary = ""
+def update_conversation_summary(prev_summary, new_query):
+    prompt = f"""
+You are an AI assistant maintaining conversation memory.
+
+Previous summary:
+{prev_summary}
+
+New user query:
+{new_query}
+
+Update the summary to capture key topics, metrics, and intent.
+
+Rules:
+- Keep it concise (max 2 lines)
+- Focus on business context (sales, time, comparison, etc.)
+- Do NOT repeat full queries
+
+Return updated summary.
+"""
+    try:
+        return cached_llm(prompt, "memory_summary")
+    except:
+        return prev_summary
 
 def load_memory():
     global agent_memory
@@ -122,6 +149,62 @@ from ingestion import load_file
 import os
 from rag_engine import retrieve
 from rag_engine import embedding_engine
+from report_engine import generate_reports
+from analytics_engine import analyze_document
+from db_engine import DBEngine
+import os
+def generate_sql_from_query(query: str, tables: list) -> str:
+    prompt = f"""
+You are a SQL generator.
+
+User query:
+{query}
+
+Available tables:
+{tables}
+
+Rules:
+- Generate ONLY a SELECT query
+- No INSERT/UPDATE/DELETE
+- Use aggregation if needed (SUM, COUNT, GROUP BY)
+- Add LIMIT if not specified
+
+Return ONLY SQL.
+"""
+    sql = cached_llm(prompt, "sql_gen").strip()
+    if "```" in sql:
+        sql = sql.replace("```sql", "").replace("```", "").strip()
+    return sql
+
+
+def try_db_mode(query: str):
+    """
+    Attempt to fetch data from DB (read-only).
+    Activated only if DB_PATH env variable is set.
+    """
+    db_path = os.getenv("DB_PATH")
+    if not db_path:
+        return None
+
+    try:
+        db = DBEngine(db_type="sqlite", connection_string=db_path)
+        db.connect()
+
+        tables = db.list_tables()
+        if not tables:
+            db.close()
+            return None
+
+        sql = generate_sql_from_query(query, tables)
+        df = db.safe_query(sql)
+
+        db.close()
+        print("[DB Mode Activated]")
+        return df
+
+    except Exception as e:
+        print(f"[DB Mode Error]: {e}")
+        return None
 
 # --- Embedding model selection helper ---
 def select_embedding_model_for_query(query: str) -> str:
@@ -168,6 +251,10 @@ def col_similarity(c1, c2):
 # Load cache at startup
 load_cache()
 load_memory()
+def reset_context():
+    global query_context, conversation_summary
+    query_context = QueryContext()
+    conversation_summary = ""
 
 
 def generate_plan(query, df_columns, strategy):
@@ -637,6 +724,33 @@ Return as Python list.
 
 def run_agent(query, df=None):
 
+    # --- LLM-based Query Understanding ---
+    try:
+        intent_struct = interpret_query(query)
+        debug_intent(intent_struct)
+        query = rewrite_query_from_intent(intent_struct)
+        print(f"[Rewritten Query]: {query}")
+    except Exception as e:
+        print(f"[LLM Query Understanding Failed]: {e}")
+
+    # --- Intelligent Context Memory ---
+    global conversation_summary
+    try:
+        # enrich query using summary
+        if conversation_summary:
+            query = f"{conversation_summary} | {query}"
+
+        query_context.add(query)
+
+        # update summary using LLM
+        conversation_summary = update_conversation_summary(conversation_summary, query)
+
+        print(f"[Context Summary]: {conversation_summary}")
+        print(f"[Context-Aware Query]: {query}")
+
+    except Exception as e:
+        print(f"[Context Error]: {e}")
+
     # --- Select embedding model dynamically ---
     try:
         model_key = select_embedding_model_for_query(query)
@@ -647,7 +761,11 @@ def run_agent(query, df=None):
         print(f"[Embedding Model Selection Error]: {e}")
 
     # --- Detect query intent ---
-    intent = detect_query_intent(query)
+    # Prefer LLM intent if available
+    try:
+        intent = intent_struct.get("intent", detect_query_intent(query))
+    except:
+        intent = detect_query_intent(query)
     print(f"[Detected Intent]: {intent}")
 
     # --- Decide query type (structured vs unstructured vs hybrid) ---
@@ -675,6 +793,13 @@ Return ONLY one word:
         print("\n[RAG Context Used]:")
         print(rag_text[:500])
 
+    # --- Try DB as data source (optional, read-only) ---
+    if df is None:
+        db_df = try_db_mode(query)
+        if db_df is not None and not db_df.empty:
+            df = db_df
+            print("[Using DB as data source]")
+
     # Step 1: select dataset
     selected_files = select_datasets_llm(query)
 
@@ -687,14 +812,15 @@ Return ONLY one word:
     print("\n[Selected Datasets]:", selected_files)
 
     dfs = []
-    for file in selected_files:
-        file_path = os.path.join("data", file)
-        try:
-            dfs.append(load_file(file_path))
-        except Exception as e:
-            print(f"Failed to load {file}: {e}")
+    if df is None:
+        for file in selected_files:
+            file_path = os.path.join("data", file)
+            try:
+                dfs.append(load_file(file_path))
+            except Exception as e:
+                print(f"Failed to load {file}: {e}")
 
-    if not dfs:
+    if df is None and not dfs:
         # Force RAG usage if any context exists
         if rag_context:
             rag_text = "\n".join(rag_context[:5])
@@ -730,10 +856,21 @@ TASK:
 
         return "No dataset available and no relevant documents found"
 
-    df = merge_datasets(dfs, query)
+    if df is None:
+        df = merge_datasets(dfs, query)
     if df is not None and df.shape[1] > 50:
         print("[Warning]: Large merged dataset - possible incorrect join")
     df = df.copy()
+
+    # --- Smart Document Analysis (if structured OCR data detected) ---
+    doc_analysis = None
+    try:
+        if isinstance(df, type(df)) and set(["field", "value"]).issubset(set(df.columns)):
+            doc_analysis = analyze_document(df)
+            print("\n[Document Analysis Detected]:")
+            print(doc_analysis)
+    except Exception as e:
+        print(f"[Document Analysis Error]: {e}")
 
     if df is None:
         return "No dataset available"
@@ -881,7 +1018,12 @@ Give a concise explanation that:
 
     explanation_text = cached_llm(explanation_prompt, "explanation")
 
+    doc_section = ""
+    if doc_analysis and "insights" in doc_analysis:
+        doc_section = "\nDocument Insights:\n" + "\n".join(f"- {i}" for i in doc_analysis["insights"]) + "\n"
+
     explanation = f"""
+{doc_section}
 Insights:
 {insights}
 
@@ -902,8 +1044,19 @@ Explanation:
     except Exception as e:
         print(f"Snapshot save failed: {e}")
 
+    # --- Generate reports ---
+    try:
+        report_paths = generate_reports(query, result, explanation)
+        print("\n[Reports Generated]:")
+        print(report_paths)
+    except Exception as e:
+        print(f"[Report Generation Error]: {e}")
+        report_paths = {}
+
     return {
         "generated_code": code,
         "result": result,
-        "explanation": explanation
+        "explanation": explanation,
+        "reports": report_paths,
+        "document_analysis": doc_analysis
     }

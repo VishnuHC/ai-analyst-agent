@@ -31,6 +31,7 @@ def add_document(text, filename="unknown", page_number=None):
     """
     Add document to FAISS index
     """
+    print(f"[RAG] Adding document: {filename}")
     global index, chunks_store, sources_store
 
     chunks = chunk_text(text)
@@ -58,6 +59,24 @@ def add_document(text, filename="unknown", page_number=None):
         index = faiss.IndexFlatL2(dim)
 
     index.add(embeddings)
+
+
+def add_dataframe(df, filename="unknown"):
+    """
+    Convert DataFrame (including OCR text DF) into text and add to RAG.
+    """
+    try:
+        # If OCR text column exists, prioritize it
+        if "text" in df.columns:
+            text = "\n".join(df["text"].astype(str).tolist())
+        else:
+            # fallback: convert entire DF to string
+            text = df.to_string(index=False)
+        
+        add_document(text, filename=filename)
+    
+    except Exception as e:
+        print(f"[RAG DF Error]: {e}")
 
 
 def retrieve(query, top_k=5):
@@ -105,7 +124,7 @@ def retrieve(query, top_k=5):
                 source_str = filename
 
             # trim long chunks for better prompt usage
-            trimmed_chunk = chunk[:500]
+            trimmed_chunk = chunk[:400].strip()
 
             results.append(f"[Source: {source_str}] {trimmed_chunk}")
 
