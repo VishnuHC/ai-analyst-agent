@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
 from typing import Optional
+import psycopg2
 
 
 class DBEngine:
@@ -18,9 +19,13 @@ class DBEngine:
         Establish DB connection (read-only where possible)
         """
         if self.db_type == "sqlite":
-            # SQLite read-only mode
             uri = f"file:{self.connection_string}?mode=ro"
             self.conn = sqlite3.connect(uri, uri=True)
+
+        elif self.db_type == "postgres":
+            # connection_string should be DSN
+            self.conn = psycopg2.connect(self.connection_string)
+
         else:
             raise NotImplementedError(f"{self.db_type} not supported yet")
 
@@ -35,13 +40,67 @@ class DBEngine:
             df = pd.read_sql(query, self.conn)
             return df["name"].tolist()
 
+        elif self.db_type == "postgres":
+            query = """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+            """
+            df = pd.read_sql(query, self.conn)
+            return df["table_name"].tolist()
+
         return []
+
+    def get_schema(self):
+        """
+        Returns schema info: tables + columns + types
+        """
+        schema = {}
+
+        if self.db_type == "sqlite":
+            tables = self.list_tables()
+
+            for table in tables:
+                query = f"PRAGMA table_info({table});"
+                df = pd.read_sql(query, self.conn)
+
+                schema[table] = []
+                for _, row in df.iterrows():
+                    schema[table].append({
+                        "column": row["name"],
+                        "type": row["type"]
+                    })
+
+        elif self.db_type == "postgres":
+            query = """
+            SELECT table_name, column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+            ORDER BY table_name
+            """
+            df = pd.read_sql(query, self.conn)
+
+            for _, row in df.iterrows():
+                table = row["table_name"]
+                if table not in schema:
+                    schema[table] = []
+
+                schema[table].append({
+                    "column": row["column_name"],
+                    "type": row["data_type"]
+                })
+
+        return schema
 
     def safe_query(self, query: str, limit: int = 10000) -> pd.DataFrame:
         """
         Execute ONLY SELECT queries safely
         """
         query_clean = query.strip().lower()
+
+        # prevent multiple statements
+        if ";" in query_clean[:-1]:
+            raise ValueError("Multiple statements not allowed")
 
         if not query_clean.startswith("select"):
             raise ValueError("Only SELECT queries are allowed (read-only mode)")
@@ -52,7 +111,10 @@ class DBEngine:
 
         print(f"[DB] Executing query: {query}")
 
-        df = pd.read_sql(query, self.conn)
+        try:
+            df = pd.read_sql(query, self.conn)
+        except Exception as e:
+            raise RuntimeError(f"Query execution failed: {e}")
 
         return df
 

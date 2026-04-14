@@ -83,3 +83,10 @@ def ocr_image(image_path: str, languages=None) -> str:
     except Exception as e:
         print(f"[OCR Error]: {e}")
         return ""
+
+# --- Compatibility wrapper ---
+def extract_text_from_image(image_path: str) -> str:
+    """
+    Wrapper for backward compatibility with existing imports
+    """
+    return ocr_image(image_path)

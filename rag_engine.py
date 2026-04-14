@@ -1,3 +1,41 @@
+def is_high_quality_chunk(chunk: str) -> bool:
+    """
+    Dynamically evaluate chunk quality based on:
+    - length
+    - numeric density
+    - information density (unique words)
+    - low stopword ratio (less fluff)
+    """
+
+    words = chunk.split()
+    if len(words) < 30:
+        return False
+
+    lower_words = [w.lower() for w in words]
+
+    # --- Numeric density (important for data)
+    num_count = sum(1 for c in chunk if c.isdigit())
+    numeric_score = num_count / max(len(chunk), 1)
+
+    # --- Unique word ratio (information density)
+    unique_ratio = len(set(lower_words)) / len(lower_words)
+
+    # --- Stopword ratio (basic noise detection)
+    stopwords = {
+        "the", "is", "and", "of", "to", "in", "for", "with",
+        "on", "as", "by", "at", "an", "be", "this", "that",
+        "from", "or", "it", "are", "was"
+    }
+    stopword_ratio = sum(1 for w in lower_words if w in stopwords) / len(lower_words)
+
+    # --- Heuristic scoring
+    score = (
+        (numeric_score * 2.0) +      # prioritize numbers
+        (unique_ratio * 1.5) -       # reward information density
+        (stopword_ratio * 1.5)       # penalize fluff
+    )
+
+    return score > 0.2
 import numpy as np
 import faiss
 from embedding_engine import EmbeddingEngine
@@ -8,6 +46,11 @@ embedding_engine = EmbeddingEngine()
 index = None
 chunks_store = []
 sources_store = []  # will store (filename, page_number)
+
+# Track already added sources to prevent duplicates
+added_sources = set()
+# Track unique document names for true document count
+document_names = set()
 
 
 def chunk_text(text, chunk_size=150, overlap=50):
@@ -31,10 +74,22 @@ def add_document(text, filename="unknown", page_number=None):
     """
     Add document to FAISS index
     """
+    global index, chunks_store, sources_store, added_sources, document_names
+
+    source_key = (filename, page_number)
+    if source_key in added_sources:
+        return
+
     print(f"[RAG] Adding document: {filename}")
-    global index, chunks_store, sources_store
+    added_sources.add(source_key)
+    document_names.add(filename)
 
     chunks = chunk_text(text)
+
+    # Filter chunks for quality
+    chunks = [c for c in chunks if is_high_quality_chunk(c)]
+    if not chunks:
+        return
 
     # Encode chunks using embedding engine
     embs = embedding_engine.encode(chunks)
@@ -42,15 +97,17 @@ def add_document(text, filename="unknown", page_number=None):
     # Fallback: if embeddings unavailable, just store chunks (no FAISS)
     if embs is None:
         for chunk in chunks:
-            chunks_store.append(chunk)
-            sources_store.append((filename, page_number))
+            if chunk not in chunks_store:
+                chunks_store.append(chunk)
+                sources_store.append((filename, page_number))
         return
 
     embeddings = []
     for i, chunk in enumerate(chunks):
         embeddings.append(embs[i])
-        chunks_store.append(chunk)
-        sources_store.append((filename, page_number))
+        if chunk not in chunks_store:
+            chunks_store.append(chunk)
+            sources_store.append((filename, page_number))
 
     embeddings = np.array(embeddings).astype("float32")
 
@@ -125,7 +182,14 @@ def retrieve(query, top_k=5):
 
             # trim long chunks for better prompt usage
             trimmed_chunk = chunk[:400].strip()
+            if len(trimmed_chunk.split()) < 20:
+                continue
 
             results.append(f"[Source: {source_str}] {trimmed_chunk}")
 
     return results
+
+
+# Return the number of unique documents added
+def get_document_count():
+    return len(document_names)

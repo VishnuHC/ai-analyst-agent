@@ -1,3 +1,90 @@
+def analyze_multiple_dfs(dfs, query):
+    """
+    Full multi-dataset analysis:
+    - runs full pipeline per dataset
+    - executes real computation
+    - combines results intelligently
+    """
+
+    results = []
+
+    for i, df_local in enumerate(dfs):
+        try:
+            print(f"\n[Analyzing Dataset {i+1}]")
+
+            df_local = df_local.copy()
+
+            # Select relevant columns
+            df_local = select_context(query, df_local)
+
+            # Plan
+            intent = detect_query_intent(query)
+            strategy = get_execution_strategy(intent)
+            plan = generate_plan(query, list(df_local.columns), strategy)
+
+            # Reasoning
+            df_dtypes = {col: str(dtype) for col, dtype in df_local.dtypes.items()}
+            reasoning = generate_reasoning(
+                query,
+                list(df_local.columns),
+                df_dtypes,
+                plan
+            )
+
+            # Code generation
+            code = generate_code(
+                query,
+                list(df_local.columns),
+                df_dtypes,
+                reasoning
+            )
+
+            # Execute
+            result = execute_code(code, df_local)
+
+            results.append({
+                "dataset": i + 1,
+                "columns": list(df_local.columns),
+                "result": str(result)
+            })
+
+        except Exception as e:
+            results.append({
+                "dataset": i + 1,
+                "columns": [],
+                "result": f"Error: {e}"
+            })
+
+    # --- Combine results ---
+    combined_prompt = f"""
+You are a senior business analyst.
+
+User query:
+{query}
+
+Results from multiple datasets:
+{results}
+
+TASK:
+- Identify most relevant datasets
+- Combine quantitative insights
+- Resolve conflicts
+- Ignore noisy/irrelevant results
+
+IMPORTANT:
+- Prefer numeric evidence
+- Be decisive
+- Give ONE final business answer
+
+Return final answer only.
+"""
+
+    try:
+        final = cached_llm(combined_prompt, "multi_df_final")
+        return final
+    except:
+        # fallback if LLM fails
+        return str(results[0]) if results else "No valid results"
 # --- EXECUTION STRATEGY ENGINE ---
 def get_execution_strategy(intent: str) -> str:
     """
@@ -180,14 +267,17 @@ Return ONLY SQL.
 def try_db_mode(query: str):
     """
     Attempt to fetch data from DB (read-only).
-    Activated only if DB_PATH env variable is set.
+    Supports PostgreSQL (preferred) and SQLite.
+    Uses schema-aware SQL generation.
     """
     db_path = os.getenv("DB_PATH")
+    db_type = os.getenv("DB_TYPE", "postgres")  # default to postgres
+
     if not db_path:
         return None
 
     try:
-        db = DBEngine(db_type="sqlite", connection_string=db_path)
+        db = DBEngine(db_type=db_type, connection_string=db_path)
         db.connect()
 
         tables = db.list_tables()
@@ -195,11 +285,110 @@ def try_db_mode(query: str):
             db.close()
             return None
 
-        sql = generate_sql_from_query(query, tables)
+        # --- Select relevant tables using LLM ---
+        table_prompt = f"""
+User query:
+{query}
+
+Available tables:
+{tables}
+
+Select ONLY relevant tables needed.
+
+Return Python list.
+"""
+
+        try:
+            selected_tables = eval(cached_llm(table_prompt, "table_select"))
+            if not selected_tables:
+                selected_tables = tables[:2]
+        except:
+            selected_tables = tables[:2]
+
+        print("[Selected DB Tables]:", selected_tables)
+
+        # --- Get schema ---
+        schema = db.get_schema()
+
+        # Build schema text for LLM
+        schema_text = ""
+        for table, cols in schema.items():
+            if table not in selected_tables:
+                continue
+            schema_text += f"\nTable: {table}\n"
+            for col in cols:
+                schema_text += f" - {col['column']} ({col['type']})\n"
+
+        # --- Generate SQL using schema ---
+        prompt = f"""
+You are an expert SQL analyst.
+
+Relevant tables:
+{selected_tables}
+Database schema:
+{schema_text}
+
+User query:
+{query}
+
+CRITICAL GOAL:
+- DO NOT return raw data
+- ALWAYS return aggregated or filtered results
+
+RULES:
+- ONLY generate SELECT queries
+- NO SELECT * unless explicitly required
+- ALWAYS prefer:
+    • SUM, COUNT, AVG, GROUP BY
+    • filters (WHERE)
+- Use joins ONLY if necessary
+- Add LIMIT 1000 ONLY if aggregation is not possible
+
+BAD:
+SELECT * FROM sales
+
+GOOD:
+SELECT region, SUM(revenue)
+FROM sales
+GROUP BY region
+
+Return ONLY SQL.
+"""
+
+        sql = cached_llm(prompt, "sql_gen").strip()
+
+        # Clean markdown if present
+        if "```" in sql:
+            sql = sql.replace("```sql", "").replace("```", "").strip()
+
+        # Safety: enforce SELECT only
+        if not sql.lower().startswith("select"):
+            raise ValueError("Unsafe SQL generated")
+
+        # Safety: ensure LIMIT
+        if "limit" not in sql.lower():
+            sql += " LIMIT 1000"
+
+        print("\n[Generated SQL Preview]:")
+        print(sql)
+
+        # Ask for confirmation before execution
+        try:
+            user_confirm = input("Execute this query? (yes/no): ").strip().lower()
+        except Exception:
+            user_confirm = "yes"  # fallback for non-interactive environments
+
+        if user_confirm not in ["yes", "y"]:
+            db.close()
+            print("[DB Query Cancelled by User]")
+            return None
+
         df = db.safe_query(sql)
 
         db.close()
-        print("[DB Mode Activated]")
+        print("[DB Mode Activated - Schema Aware]")
+        print("[SQL]:", sql)
+
         return df
 
     except Exception as e:
@@ -793,13 +982,13 @@ Return ONLY one word:
         print("\n[RAG Context Used]:")
         print(rag_text[:500])
 
-    # --- Try DB as data source (optional, read-only) ---
-    if df is None:
-        db_df = try_db_mode(query)
-        if db_df is not None and not db_df.empty:
-            df = db_df
-            print("[Using DB as data source]")
+    # --- Try DB as additional data source (optional, read-only) ---
+    dfs = []
+    db_df = try_db_mode(query)
 
+    if db_df is not None and not db_df.empty:
+        print("[DB Data Retrieved]")
+        dfs.append(db_df)
     # Step 1: select dataset
     selected_files = select_datasets_llm(query)
 
@@ -811,14 +1000,56 @@ Return ONLY one word:
 
     print("\n[Selected Datasets]:", selected_files)
 
-    dfs = []
     if df is None:
         for file in selected_files:
             file_path = os.path.join("data", file)
             try:
-                dfs.append(load_file(file_path))
+                loaded = load_file(file_path)
+
+                # Handle new ingestion format
+                if isinstance(loaded, dict):
+                    if loaded.get("type") == "table":
+                        table_df = loaded.get("data")
+                        if table_df is not None:
+                            dfs.append(table_df)
+
+                    elif loaded.get("type") == "text":
+                        text_data = loaded.get("data")
+                        if text_data:
+                            rag_context.append(f"[Source: {file}] {text_data}")
+
+                else:
+                    # fallback old behavior
+                    if loaded is not None:
+                        dfs.append(loaded)
+
             except Exception as e:
                 print(f"Failed to load {file}: {e}")
+
+    # --- Filter relevant datasets ---
+    filtered_dfs = []
+    for df_i in dfs:
+        try:
+            cols = df_i.columns.tolist()
+            relevance_prompt = f"""
+User query: {query}
+
+Columns: {cols}
+
+Is this dataset relevant to the query?
+
+Return ONLY:
+- "yes"
+- "no"
+"""
+            decision = cached_llm(relevance_prompt, "df_filter").strip().lower()
+            if decision == "yes":
+                filtered_dfs.append(df_i)
+        except:
+            filtered_dfs.append(df_i)
+
+    if filtered_dfs:
+        dfs = filtered_dfs
 
     if df is None and not dfs:
         # Force RAG usage if any context exists
@@ -826,7 +1057,7 @@ Return ONLY one word:
             rag_text = "\n".join(rag_context[:5])
 
             rag_answer_prompt = f"""
-You are a STRICT document analyst.
+You are a DATA-DRIVEN analyst.
 
 User query:
 {query}
@@ -834,17 +1065,21 @@ User query:
 Relevant document excerpts:
 {rag_text}
 
-RULES:
-- Answer ONLY using the provided excerpts
-- MUST cite sources like [Source: filename, Page X]
-- DO NOT be generic
-- If insufficient info, say "Insufficient information"
-
 TASK:
-- Extract ONLY business-relevant meaning
-- Ignore statistical/technical noise
-- Explain what this means for sales, demand, or performance
-- Be concise and practical
+- Extract the MOST RELEVANT information from the excerpts
+- If numeric/comparable data exists → derive the BEST answer (e.g., highest, lowest, trend)
+- If not → use qualitative signals (descriptions, patterns, emphasis) to answer
+
+RULES:
+- Do NOT summarize blindly
+- Prefer conclusions over descriptions
+- Use BOTH:
+    • numbers (if available)
+    • qualitative insights (if no numbers)
+- NEVER default to "Insufficient structured data" unless absolutely nothing is relevant
+- Always attempt a best possible answer
+
+Return a DIRECT answer, not explanation.
 """
             rag_answer = cached_llm(rag_answer_prompt, "rag_answer")
 
@@ -857,7 +1092,16 @@ TASK:
         return "No dataset available and no relevant documents found"
 
     if df is None:
-        df = merge_datasets(dfs, query)
+        if len(dfs) == 1:
+            df = dfs[0]
+        else:
+            print("[Multi-DF Mode Activated]")
+            multi_answer = analyze_multiple_dfs(dfs, query)
+            return {
+                "generated_code": None,
+                "result": None,
+                "explanation": multi_answer
+            }
     if df is not None and df.shape[1] > 50:
         print("[Warning]: Large merged dataset - possible incorrect join")
     df = df.copy()
@@ -877,12 +1121,15 @@ TASK:
 
     # --- Inject RAG context into reasoning ---
     if rag_text:
+        # Use only top 2 most relevant chunks to avoid noise
+        filtered_rag = "\n".join(rag_context[:2])
+
         query = f"""
 User Query:
 {query}
 
-Additional Context from documents:
-{rag_text}
+Relevant Data Context (use ONLY if directly useful):
+{filtered_rag}
 """
 
     df = select_context(query, df)

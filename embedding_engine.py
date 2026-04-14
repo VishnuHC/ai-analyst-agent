@@ -21,7 +21,7 @@ class EmbeddingEngine:
 
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
+        model_name: str = "all-mpnet-base-v2",
         local_path: Optional[str] = None,
         device: Optional[str] = None,
         available_models: Optional[dict] = None,
@@ -70,15 +70,9 @@ class EmbeddingEngine:
 
     def switch_model(self, model_key: str):
         """
-        Switch embedding model dynamically
+        Disabled: model switching breaks embedding consistency.
         """
-        if model_key not in self.available_models:
-            print(f"⚠️ Unknown model key: {model_key}")
-            return
-
-        self.model_name = self.available_models[model_key]
-        print(f"🔄 Switching embedding model → {self.model_name}")
-        self._load_model()
+        print("⚠️ Model switching disabled to maintain embedding consistency.")
 
     def is_available(self) -> bool:
         return self.model is not None

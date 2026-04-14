@@ -11,10 +11,7 @@ def load_catalog():
     if not os.path.exists(CATALOG_PATH):
         return {}
 
-    with open(CATALOG_PATH, "r") as f:
-        catalog = json.load(f)
-
-    # Auto-sync with actual data folder
+    # Auto-sync ensures latest state
     catalog = sync_catalog_with_data()
 
     return catalog
@@ -31,7 +28,8 @@ def get_file_hash(path):
     """
     hasher = hashlib.md5()
     with open(path, "rb") as f:
-        hasher.update(f.read())
+        while chunk := f.read(8192):
+            hasher.update(chunk)
     return hasher.hexdigest()
 
 
@@ -54,7 +52,7 @@ def sync_catalog_with_data(folder="data"):
 
     actual_files = {
         f: get_file_hash(os.path.join(folder, f))
-        for f in os.listdir(folder)
+        for f in os.listdir(folder) if not f.startswith(".")
         if f.endswith(".csv") or f.endswith(".xlsx")
     }
 
@@ -167,3 +165,41 @@ def update_dataset_catalog(file_name, profile):
     print(f"\n[Dataset Catalog Updated for {file_name}]")
 
     return catalog
+
+def select_datasets(query: str, folder="data"):
+    """
+    Select relevant datasets based on query using simple scoring.
+    Fallback: return all datasets if nothing matched.
+    """
+    if not os.path.exists(folder):
+        return []
+
+    available_files = [
+        f for f in os.listdir(folder)
+        if (f.endswith(".csv") or f.endswith(".xlsx")) and not f.startswith(".")
+    ]
+
+    if not available_files:
+        return []
+
+    query_words = set(query.lower().split())
+
+    scored = []
+
+    for file in available_files:
+        file_words = set(file.lower().replace(".csv", "").replace(".xlsx", "").split("_"))
+        score = len(query_words.intersection(file_words))
+        scored.append((file, score))
+
+    # sort by relevance
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    # take top relevant datasets (score > 0)
+    selected = [f for f, s in scored if s > 0]
+
+    if not selected:
+        print("[Fallback Triggered]: Using all datasets")
+        return available_files
+
+    print(f"[Dataset Selection - All Relevant]: {selected}")
+    return selected  # no limit, use all relevant datasets
